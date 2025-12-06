@@ -1,0 +1,24 @@
+# Python venv
+.venv/
+venv/
+
+# Pycache
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model weights
+models/distilbert_langdet/*
+
+# Large datasets
+src/data/*.csv
+
+# VSCode
+.vscode/
+
+# System files
+.DS_Store
+
+notebooks/tmp_trainer/
