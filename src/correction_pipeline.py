@@ -1,83 +1,60 @@
-import sys
 import os
+import sys
 
-# Yolları ekle (Modüllerin bulunması için)
-sys.path.append(os.path.join(os.path.dirname(__file__), 'spelling'))
+# Proje kök dizinini yola ekle
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
-from transformers import MBart50TokenizerFast, MBartForConditionalGeneration
-from spelling.spell_checker import SpellingCorrector
-import torch
+from src.language_detection.hybrid_detector import HybridDetector
+from src.spelling.TR.spell_checker import SmartCorrector
+from src.grammar.grammar_corrector import GrammarCorrector
+from src.punctuation.punctuation_restorer import PunctuationRestorer
 
 class TextCorrectionPipeline:
-    def __init__(self, model_path):
-        print("🚀 Düzeltme Motoru Başlatılıyor...")
+    def __init__(self):
+        print("🚀 Tüm modeller yükleniyor, lütfen bekleyin...")
         
-        # 1. Spelling Modülünü Yükle
-        print("📦 Spelling (Yazım) Modülü yükleniyor...")
-        self.spelling_corrector = SpellingCorrector()
+        # 1. Dil Tespiti
+        self.detector = HybridDetector(model_path="models/distilbert_langdet")
         
-        # 2. Grammar Modelini Yükle
-        print(f"🧠 Grammar (Dilbilgisi) Modeli yükleniyor: {model_path}...")
-        try:
-            # GPU varsa kullan, yoksa CPU
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"🔥 Çalışma Modu: {self.device.upper()}")
+        # 2. Yazım Denetimi (Zemberek)
+        self.speller = SmartCorrector()
+        
+        # 3. Gramer Modeli
+        self.grammar = GrammarCorrector()
+        
+        # 4. Noktalama Modeli (Zemberek nesnesini paylaşıyoruz)
+        self.punc_restorer = PunctuationRestorer(morphology=self.speller.morphology)
+        
+        print("✅ Sistem başarıyla hazırlandı!")
 
-            self.tokenizer = MBart50TokenizerFast.from_pretrained(model_path, src_lang="tr_TR", tgt_lang="tr_TR")
-            self.model = MBartForConditionalGeneration.from_pretrained(model_path).to(self.device)
-            print("✅ Grammar Modeli hazır!")
-        except Exception as e:
-            print(f"❌ HATA: Model yüklenemedi. {e}")
-            exit()
+    def process(self, text):
+        if not text.strip():
+            return None, "unknown", "Metin boş olamaz."
 
-    def correct(self, text):
-        """
-        Metni alır, önce Spelling'den geçirir, sonra Grammar modeline sokar.
-        """
-        # Adım 1: Spelling Düzeltmesi (Ön Temizlik)
-        spelling_fixed = self.spelling_corrector.correct_text(text)
-        
-        # Adım 2: Grammar Düzeltmesi (Derin Temizlik)
-        inputs = self.tokenizer(spelling_fixed, return_tensors="pt").to(self.device)
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                forced_bos_token_id=self.tokenizer.lang_code_to_id["tr_TR"],
-                max_length=128,
-                num_beams=5, # Akıllı arama
-                early_stopping=True
-            )
-            
-        grammar_fixed = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return grammar_fixed
+        # Ara sonuçları tutacak sözlük
+        steps = {
+            "raw": text,
+            "spelling": None,
+            "grammar": None,
+            "final": None
+        }
 
-if __name__ == "__main__":
-    # Modelin yolunu buraya yaz (Drive'dan indirdiğin klasör)
-    # Eğer klasör adı farklıysa burayı düzelt
-    MODEL_DIR = "models/grammar_model/Büyük_ama_Etkili_Model" 
-    
-    if not os.path.exists(MODEL_DIR):
-        print(f"⚠️ UYARI: '{MODEL_DIR}' klasörü bulunamadı. Lütfen model yolunu kontrol edin.")
-    else:
-        pipeline = TextCorrectionPipeline(MODEL_DIR)
+        # A. DİL TESPİTİ
+        lang = self.detector.detect(text)
         
-        # Test Cümleleri
-        test_inputs = [
-            "Bugn hva cok guzel",           # Spelling + Grammar hatası
-            "Herkez burda mı",              # Klasik yazım yanlışı
-            "Bende gelmek istyorum",        # -de/-da ve harf hatası
-            "Kitab okumayi sevyorum",       # Yumuşama ve harf hatası
-            "Bende sizinle gelmk istiyorm", 
-            "Mrhb, nerey gittin"
-        ]
-        
-        print("\n" + "="*50)
-        print("   TÜRKÇE METİN DÜZELTME TESTİ (FINAL)   ")
-        print("="*50 + "\n")
+        if lang != "tr":
+            return None, lang, "Şu an sadece Türkçe desteklenmektedir."
 
-        for text in test_inputs:
-            result = pipeline.correct(text)
-            print(f"🔴 Girdi:  {text}")
-            print(f"🟢 Sonuç:  {result}")
-            print("-" * 30)
+        # B. TÜRKÇE DÜZELTME ZİNCİRİ
+        # 1. Yazım Denetimi
+        steps["spelling"] = self.speller.correct(text)
+        
+        # 2. Gramer Düzeltme
+        steps["grammar"] = self.grammar.correct(steps["spelling"])
+        
+        # 3. Noktalama ve Büyük Harf
+        steps["final"] = self.punc_restorer.restore(steps["grammar"])
+        
+        return steps, "tr", None
