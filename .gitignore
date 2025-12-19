@@ -22,3 +22,5 @@ models/grammar_model/Küçük_ama_Eksik_Model/*
 .DS_Store
 
 notebooks/tmp_trainer/
+
+scripts/
