@@ -11,8 +11,7 @@ __pycache__/
 
 # Model weights
 models/distilbert_langdet/*
-models/grammar_model/Büyük_ama_Etkili_Model/*
-models/grammar_model/Küçük_ama_Eksik_Model/*
+models/grammar_model/*
 !models/**/.gitkeep
 
 # VSCode
