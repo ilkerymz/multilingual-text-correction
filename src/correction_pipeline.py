@@ -10,6 +10,7 @@ from src.language_detection.hybrid_detector import HybridDetector
 from src.spelling.TR.spell_checker import SmartCorrector
 from src.grammar.grammar_corrector import GrammarCorrector
 from src.punctuation.punctuation_restorer import PunctuationRestorer
+from src.english_correction_pipeline import EnglishCorrectionPipeline
 
 class TextCorrectionPipeline:
     def __init__(self):
@@ -18,14 +19,13 @@ class TextCorrectionPipeline:
         # 1. Dil Tespiti
         self.detector = HybridDetector(model_path="models/distilbert_langdet")
         
-        # 2. Yazım Denetimi (Zemberek)
+        # 2. Türkçe yazım ve sonrası için bileşenler
         self.speller = SmartCorrector()
-        
-        # 3. Gramer Modeli
-        self.grammar = GrammarCorrector()
-        
-        # 4. Noktalama Modeli (Zemberek nesnesini paylaşıyoruz)
+        self.grammar = GrammarCorrector(device="cpu")
         self.punc_restorer = PunctuationRestorer(morphology=self.speller.morphology)
+
+        # 3. İngilizce pipeline (SymSpell + T5)
+        self.english_pipeline = EnglishCorrectionPipeline()
         
         print("✅ Sistem başarıyla hazırlandı!")
 
@@ -44,17 +44,18 @@ class TextCorrectionPipeline:
         # A. DİL TESPİTİ
         lang = self.detector.detect(text)
         
-        if lang != "tr":
-            return None, lang, "Şu an sadece Türkçe desteklenmektedir."
+        if lang == "tr":
+            # B. TÜRKÇE DÜZELTME ZİNCİRİ
+            steps["spelling"] = self.speller.correct(text)
+            steps["grammar"] = self.grammar.correct(steps["spelling"])
+            steps["final"] = self.punc_restorer.restore(steps["grammar"])
+            return steps, "tr", None
 
-        # B. TÜRKÇE DÜZELTME ZİNCİRİ
-        # 1. Yazım Denetimi
-        steps["spelling"] = self.speller.correct(text)
-        
-        # 2. Gramer Düzeltme
-        steps["grammar"] = self.grammar.correct(steps["spelling"])
-        
-        # 3. Noktalama ve Büyük Harf
-        steps["final"] = self.punc_restorer.restore(steps["grammar"])
-        
-        return steps, "tr", None
+        if lang == "en":
+            # C. İNGİLİZCE DÜZELTME ZİNCİRİ
+            steps["spelling"] = self.english_pipeline.spelling_corrector.correct(text)
+            steps["grammar"] = self.english_pipeline.grammar_corrector.correct(steps["spelling"])
+            steps["final"] = steps["grammar"]  # Şimdilik noktalama/restorasyon yok
+            return steps, "en", None
+
+        return None, lang, "Bu dil şu anda desteklenmiyor."

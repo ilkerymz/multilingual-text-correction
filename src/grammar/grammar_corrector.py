@@ -2,8 +2,12 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 class GrammarCorrector:
-    def __init__(self, model_path="./models/grammar_model/"):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, model_path="./models/grammar_model/Büyük_ama_Etkili_Model", device=None):
+        if device:
+            self.device = device
+        else:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
         print(f"📂 Gramer modeli yükleniyor ({self.device})...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_path).to(self.device)
