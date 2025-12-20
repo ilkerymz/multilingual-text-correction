@@ -2,7 +2,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 class GrammarCorrector:
-    def __init__(self, model_path="./models/grammar_model/Büyük_ama_Etkili_Model", device=None):
+    def __init__(self, model_path="./models/grammar_model/", device=None):
         if device:
             self.device = device
         else:
