@@ -1,316 +1,304 @@
 import streamlit as st
 import os
 import sys
+from difflib import SequenceMatcher
 
-# Kök dizini ekle
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# ================= PATH SETUP =================
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
 from src.correction_pipeline import TextCorrectionPipeline
 
-st.set_page_config(page_title="Türkçe Metin Düzeltici", page_icon="✨", layout="wide")
+# ================= DIFF UTILS =================
+def diff_highlights(original: str, corrected: str):
+    orig_tokens = original.split()
+    corr_tokens = corrected.split()
+    matcher = SequenceMatcher(None, orig_tokens, corr_tokens)
+
+    highlighted = []
+    changes = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            highlighted.extend(orig_tokens[i1:i2])
+
+        elif tag == "replace":
+            o = " ".join(orig_tokens[i1:i2])
+            n = " ".join(corr_tokens[j1:j2])
+            highlighted.append(f"<span class='bad-token'>{o}</span>")
+            changes.append(
+                f"<span class='tag grammar'>[Grammar]</span> <b>{o}</b> → <b>{n}</b>"
+            )
+
+        elif tag == "delete":
+            o = " ".join(orig_tokens[i1:i2])
+            highlighted.append(f"<span class='bad-token'>{o}</span>")
+            changes.append(
+                f"<span class='tag grammar'>[Grammar]</span> <b>{o}</b> silindi"
+            )
+
+        elif tag == "insert":
+            n = " ".join(corr_tokens[j1:j2])
+            changes.append(
+                f"<span class='tag grammar'>[Grammar]</span> Yeni eklendi: <b>{n}</b>"
+            )
+
+    return " ".join(highlighted), changes
+
+
+def highlight_new_tokens(new_text: str, old_text: str):
+    """
+    Highlight tokens in `new_text` that are inserted or replaced vs `old_text`.
+    """
+    new_tokens = new_text.split()
+    old_tokens = old_text.split()
+    matcher = SequenceMatcher(None, old_tokens, new_tokens)
+    highlighted = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            highlighted.extend(new_tokens[j1:j2])
+        elif tag in ("replace", "insert"):
+            chunk = " ".join(new_tokens[j1:j2])
+            highlighted.append(f"<span class='good-token'>{chunk}</span>")
+        elif tag == "delete":
+            # nothing to add from new side
+            continue
+
+    return " ".join(highlighted)
+
+
+def summary_bar(lang, steps):
+    raw = steps.get("raw", "")
+    spelling_changed = raw != steps.get("spelling", raw)
+    grammar_changed = steps.get("spelling", raw) != steps.get("grammar", steps.get("spelling", raw))
+
+    confidence = "High" if grammar_changed else "Medium"
+
+    return f"""
+    <div class="summary-bar">
+        <span>🌍 Language: <b>{'English' if lang == 'en' else 'Türkçe'}</b></span>
+        <span>✍️ Spelling: {'✓' if spelling_changed else '–'}</span>
+        <span>📐 Grammar: {'✓' if grammar_changed else '–'}</span>
+        <span>🧠 Confidence: {confidence}</span>
+    </div>
+    """
+
+
+# ================= STREAMLIT SETUP =================
+st.set_page_config(
+    page_title="Multilingual Text Correction System",
+    page_icon="✨",
+    layout="wide"
+)
 
 @st.cache_resource
 def load_pipeline():
     return TextCorrectionPipeline()
 
-# Gelişmiş CSS tasarımı
+pipeline = load_pipeline()
+
+# ================= CSS =================
 st.markdown("""
-    <style>
-    /* Ana arka plan */
-    .stApp {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    
-    /* Ana container */
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    
-    /* Başlık kartı */
-    .title-card {
-        background: white;
-        padding: 2rem;
-        border-radius: 20px;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    
-    .title-card h1 {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.5rem;
-        font-weight: 800;
-        margin-bottom: 0.5rem;
-    }
-    
-    .title-card p {
-        color: #666;
-        font-size: 1.1rem;
-    }
-    
-    /* Giriş kartı */
-    .input-card {
-        background: white;
-        padding: 2rem;
-        border-radius: 20px;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-        height: 100%;
-    }
-    
-    /* Adım kartları */
-    .step-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin-bottom: 1rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-        border-left: 5px solid;
-        transition: transform 0.2s, box-shadow 0.2s;
-        animation: slideIn 0.3s ease-out;
-    }
-    
-    @keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    
-    .step-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.12);
-    }
-    
-    .step-1 { border-left-color: #ff6b6b; }
-    .step-2 { border-left-color: #4ecdc4; }
-    .step-3 { border-left-color: #45b7d1; }
-    
-    .step-header {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 1rem;
-    }
-    
-    .step-icon {
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1rem;
-        color: white;
-    }
-    
-    .step-1 .step-icon { background: #ff6b6b; }
-    .step-2 .step-icon { background: #4ecdc4; }
-    .step-3 .step-icon { background: #45b7d1; }
-    
-    .step-content {
-        color: #333;
-        font-size: 1.05rem;
-        line-height: 1.6;
-        padding: 1rem;
-        background: #f8f9fa;
-        border-radius: 10px;
-    }
-    
-    .final-result {
-        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
-        font-weight: 600;
-    }
-    
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background: white;
-        box-shadow: 4px 0 15px rgba(0,0,0,0.1);
-    }
-    
-    section[data-testid="stSidebar"] .block-container {
-        padding-top: 2rem;
-    }
-    
-    /* Buton stilleri */
-    .stButton > button {
-        width: 100%;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 1.1rem;
-        transition: all 0.3s;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-    }
-    
-    /* Text area */
-    .stTextArea textarea {
-        border-radius: 12px;
-        border: 2px solid #e0e0e0;
-        font-size: 1rem;
-        padding: 1rem;
-        transition: border-color 0.3s;
-    }
-    
-    .stTextArea textarea:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
-    
-    /* Badge */
-    .status-badge {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
-        box-shadow: 0 4px 15px rgba(17, 153, 142, 0.3);
-    }
-    
-    /* Başlıklar */
-    h2, h3 {
-        color: #2d3748;
-        font-weight: 700;
-    }
-    
-    /* Uyarı mesajları */
-    .stAlert {
-        border-radius: 12px;
-        border: none;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+.stApp {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
 
-try:
-    # Sidebar
-    with st.sidebar:
-        st.markdown("### 🎯 Sistem Durumu")
-        pipeline = load_pipeline()
-        st.markdown('<div class="status-badge">✓ Tüm Modeller Aktif</div>', unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.markdown("### 📊 Pipeline Adımları")
-        st.markdown("""
-        <div style='font-size: 0.9rem; color: #666; line-height: 1.8;'>
-        <b>1️⃣ Yazım Denetimi</b><br/>
-        <small>Zemberek motoru ile Türkçe yazım kuralları</small><br/><br/>
-        
-        <b>2️⃣ Gramer Düzeltme</b><br/>
-        <small>Seq2Seq derin öğrenme modeli</small><br/><br/>
-        
-        <b>3️⃣ Noktalama & Format</b><br/>
-        <small>Büyük harf ve noktalama optimizasyonu</small>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.markdown("### 💡 İpuçları")
-        st.markdown("""
-        <small>
-        • Doğal cümleler yazın<br/>
-        • Yazım hatalarından endişe etmeyin<br/>
-        • Pipeline her adımda iyileştirme yapar
-        </small>
-        """, unsafe_allow_html=True)
+.summary-bar {
+    background: white;
+    padding: 1rem 1.5rem;
+    border-radius: 14px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.1);
+    display: flex;
+    justify-content: space-between;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+}
 
-    # Ana başlık
-    st.markdown("""
-    <div class="title-card">
-        <h1>✨ Akıllı Türkçe Metin Düzeltici</h1>
-        <p>Yapay zeka destekli çok katmanlı metin işleme sistemi</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Ana içerik
-    col1, col2 = st.columns([1, 1], gap="large")
+.title-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+    text-align: center;
+    margin-bottom: 2rem;
+}
 
-    with col1:
-        st.markdown('<div class="input-card">', unsafe_allow_html=True)
-        st.markdown("### 📝 Metin Girişi")
-        user_input = st.text_area(
-            "Düzeltmek istediğiniz metni yazın...",
-            height=300,
-            placeholder="Örnek: bu cumlede yazim hatalari var ve duzeltilmesi gerek",
-            label_visibility="collapsed"
-        )
-        
-        st.markdown("<br/>", unsafe_allow_html=True)
-        run_btn = st.button("🚀 Pipeline'ı Başlat", use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+.title-card h1 {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 2.5rem;
+    font-weight: 800;
+}
 
-    with col2:
-        st.markdown("### 🔄 İşlem Sonuçları")
-        
-        if run_btn and user_input:
-            with st.spinner("🔮 Yapay zeka çalışıyor..."):
-                steps, lang, error = pipeline.process(user_input)
-                
-                if error:
-                    st.warning(f"⚠️ Tespit edilen dil: **{lang}** - {error}")
-                else:
-                    # Adım 1
-                    st.markdown(f"""
-                    <div class="step-card step-1">
-                        <div class="step-header">
-                            <div class="step-icon">1</div>
-                            <span>Yazım Denetimi</span>
-                        </div>
-                        <div class="step-content">{steps["spelling"]}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Adım 2
-                    st.markdown(f"""
-                    <div class="step-card step-2">
-                        <div class="step-header">
-                            <div class="step-icon">2</div>
-                            <span>Gramer Düzeltme</span>
-                        </div>
-                        <div class="step-content">{steps["grammar"]}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Adım 3 - Final
-                    st.markdown(f"""
-                    <div class="step-card step-3">
-                        <div class="step-header">
-                            <div class="step-icon">✓</div>
-                            <span>Nihai Sonuç</span>
-                        </div>
-                        <div class="step-content final-result">{steps["final"]}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    st.button("📋 Sonucu Panoya Kopyala", use_container_width=True)
-                    
-        elif run_btn:
-            st.error("❌ Lütfen bir metin girin!")
-        else:
-            st.info("👆 Soldaki alana metninizi girin ve butona tıklayın")
+.input-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+}
 
-except Exception as e:
-    st.error(f"🚨 Sistem Hatası: {e}")
-    st.exception(e)
+.step-card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 15px;
+    margin-bottom: 1rem;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+    border-left: 5px solid #667eea;
+}
+
+.step-header {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #666;
+    margin-bottom: 0.8rem;
+    text-transform: uppercase;
+}
+
+.step-content {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 10px;
+    font-size: 1.05rem;
+}
+
+.final-result {
+    background: #edf2ff;
+    font-weight: 600;
+}
+
+.bad-token {
+    background: #ffe3e3;
+    color: #c53030;
+    padding: 0.1rem 0.3rem;
+    border-radius: 6px;
+}
+
+.tag {
+    font-weight: 700;
+    padding: 0.2rem 0.5rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+}
+
+.tag.grammar {
+    background: #e9d8fd;
+    color: #553c9a;
+}
+
+.good-token {
+    background: #c6f6d5;
+    color: #22543d;
+    padding: 0.05rem 0.2rem;
+    border-radius: 6px;
+}
+
+.before-after {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.before, .after {
+    flex: 1;
+    padding: 1rem;
+    border-radius: 12px;
+}
+
+.before {
+    background: #fff5f5;
+}
+
+.after {
+    background: #f0fff4;
+}
+
+.footer {
+    text-align: center;
+    color: #666;
+    font-size: 0.85rem;
+    margin-top: 2rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ================= TITLE =================
+st.markdown("""
+<div class="title-card">
+    <h1>✨ Multilingual Text Correction System</h1>
+    <p>Language Detection • Spelling Correction • Grammar Refinement</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ================= INPUT =================
+col1, col2 = st.columns(2, gap="large")
+
+with col1:
+    st.markdown('<div class="input-card">', unsafe_allow_html=True)
+    st.markdown("### 📝 Text Input")
+    user_input = st.text_area(
+        "input",
+        height=260,
+        placeholder="This sentnce have a mistake ve düzeltilmesi gerek.",
+        label_visibility="collapsed"
+    )
+    run = st.button("✨ Metni Düzelt", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ================= PROCESS =================
+if run and user_input:
+    with st.spinner("🔮 Processing..."):
+        steps, lang, error = pipeline.process(user_input)
+
+    if not error:
+        with col2:
+            st.markdown(summary_bar(lang, steps), unsafe_allow_html=True)
+
+            st.markdown("""
+            <div class="step-card">
+                <div class="step-header">Step 1 – Spelling</div>
+                <div class="step-content">{}</div>
+            </div>
+            """.format(highlight_new_tokens(steps["spelling"], steps["raw"])), unsafe_allow_html=True)
+
+            st.markdown("""
+            <div class="step-card">
+                <div class="step-header">Step 2 – Grammar</div>
+                <div class="step-content">{}</div>
+            </div>
+            """.format(highlight_new_tokens(steps["grammar"], steps["spelling"])), unsafe_allow_html=True)
+
+            st.markdown("""
+            <div class="step-card">
+                <div class="step-header">Final Output</div>
+                <div class="step-content final-result">{}</div>
+            </div>
+            """.format(steps["final"]), unsafe_allow_html=True)
+        with col1:
+            st.markdown("### 🔍 Before / After")
+            st.markdown(f"""
+            <div class="before-after">
+                <div class="before"><b>Before</b><br/>{user_input}</div>
+                <div class="after"><b>After</b><br/>{steps["final"]}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown("### 🧭 Changes Applied")
+            _, changes = diff_highlights(user_input, steps["final"])
+            if changes:
+                for c in changes:
+                    st.markdown(f"- {c}", unsafe_allow_html=True)
+            else:
+                st.info("No changes detected.")
+
+# ================= FOOTER =================
+st.markdown("""
+<hr/>
+<div class="footer">
+Multilingual Text Correction System<br/>
+Computer Engineering – Graduation Project<br/>
+© 2025
+</div>
+""", unsafe_allow_html=True)
